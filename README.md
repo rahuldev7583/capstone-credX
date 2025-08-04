@@ -14,7 +14,10 @@
 
 ---
 
+
 ## 📚 How It Works
+
+### 📊 [View Protocol Architecture Diagram](capstone_diagram.pdf)
 
 ### Protocol Flow
 
