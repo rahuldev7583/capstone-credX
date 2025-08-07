@@ -16,6 +16,6 @@ pub mod cred_x {
     use super::*;
 
     pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
-        initialize::handler(ctx)
+        initialize_protocol::handler(ctx)
     }
 }
