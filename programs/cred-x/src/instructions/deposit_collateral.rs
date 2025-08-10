@@ -1,5 +1,7 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token::{transfer, Transfer, Token, TokenAccount};
+use anchor_spl::{associated_token::AssociatedToken, token::{transfer, Mint, Token, TokenAccount, Transfer}};
+
+use crate::CollateralVault;
 
 #[derive(Accounts)]
 pub struct DepositCollateral<'info>{
@@ -37,7 +39,7 @@ impl <'info> DepositCollateral<'info> {
 
         let ctx = CpiContext::new(program, accounts);
 
-        transfer(ctx, amount);
+        transfer(ctx, amount)?;
         
         Ok(())
     }
