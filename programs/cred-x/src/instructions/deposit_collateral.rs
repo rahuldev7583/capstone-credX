@@ -1,14 +1,17 @@
 use anchor_lang::prelude::*;
-use anchor_spl::{associated_token::AssociatedToken, token::{transfer, Mint, Token, TokenAccount, Transfer}};
+use anchor_spl::{
+    associated_token::AssociatedToken,
+    token::{transfer, Mint, Token, TokenAccount, Transfer},
+};
 
 use crate::CollateralVault;
 
 #[derive(Accounts)]
-pub struct DepositCollateral<'info>{
+pub struct DepositCollateral<'info> {
     #[account(mut)]
     user: Signer<'info>,
-    
-    #[account(mut, mint::decimals = 6, mint::authority = mint_authority)]    
+
+    #[account(mut, mint::decimals = 6, mint::authority = mint_authority)]
     pub credit_mint: Account<'info, Mint>,
 
     #[account(mut, associated_token::mint = credit_mint, associated_token::authority = user)]
@@ -28,19 +31,19 @@ pub struct DepositCollateral<'info>{
     pub system_program: Program<'info, System>,
 }
 
-impl <'info> DepositCollateral<'info> {
-    pub fn deposit_collateral(&mut self, amount: u64)-> Result<()>{
+impl<'info> DepositCollateral<'info> {
+    pub fn deposit_collateral(&mut self, amount: u64) -> Result<()> {
         let program = self.token_program.to_account_info();
-        let accounts = Transfer{
+        let accounts = Transfer {
             from: self.user_credit_ata.to_account_info(),
             to: self.collateral_vault_ata.to_account_info(),
-            authority: self.user.to_account_info()
+            authority: self.user.to_account_info(),
         };
 
         let ctx = CpiContext::new(program, accounts);
 
         transfer(ctx, amount)?;
-        
+
         Ok(())
     }
 }

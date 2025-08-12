@@ -8,5 +8,5 @@ pub struct LoanAccount {
     pub remaining_debt: u64,
     pub yield_earned: u64,
     pub bump: u8,
-    pub oracle_price_account: Pubkey
+    pub oracle_price_account: Pubkey,
 }

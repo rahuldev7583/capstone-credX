@@ -1,14 +1,14 @@
-use anchor_lang::prelude::*;
-use anchor_spl::{associated_token::AssociatedToken, token::TokenAccount};
-use anchor_spl::token::{Mint, Token};
 use crate::{CollateralVault, LoanAccount};
+use anchor_lang::prelude::*;
+use anchor_spl::token::{approve, Approve, Mint, Token};
+use anchor_spl::{associated_token::AssociatedToken, token::TokenAccount};
 
 #[derive(Accounts)]
-pub struct InitializeLoan<'info>{
+pub struct InitializeLoan<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
-    
-    #[account(mut, mint::decimals = 6, mint::authority = mint_authority)]    
+
+    #[account(mut, mint::decimals = 6, mint::authority = mint_authority)]
     pub credit_mint: Account<'info, Mint>,
 
     #[account(init_if_needed, payer = user, associated_token::mint = credit_mint, associated_token::authority = user)]
@@ -29,12 +29,34 @@ pub struct InitializeLoan<'info>{
     pub system_program: Program<'info, System>,
 }
 
-impl <'info> InitializeLoan<'info> {
-    pub fn initialize_loan(&mut self, collateral_amount: u64, bumps: &InitializeLoanBumps)-> Result<()>{
-        self.collateral_vault.set_inner(CollateralVault { mint: self.credit_mint.key(), bump: bumps.collateral_vault});
+impl<'info> InitializeLoan<'info> {
+    pub fn initialize_loan(
+        &mut self,
+        collateral_amount: u64,
+        bumps: &InitializeLoanBumps,
+    ) -> Result<()> {
+        self.collateral_vault.set_inner(CollateralVault {
+            mint: self.credit_mint.key(),
+            bump: bumps.collateral_vault,
+        });
 
-        self.loan_account.set_inner(LoanAccount { user: self.user.key(), collateral_amount: collateral_amount, remaining_debt: 0, yield_earned: 0, bump: bumps.loan_account, oracle_price_account: self.oracle_price_account.key() });
+        self.loan_account.set_inner(LoanAccount {
+            user: self.user.key(),
+            collateral_amount: collateral_amount,
+            remaining_debt: 0,
+            yield_earned: 0,
+            bump: bumps.loan_account,
+            oracle_price_account: self.oracle_price_account.key(),
+        });
 
+        let accounts = Approve {
+            to: self.user_credit_ata.to_account_info(),
+            authority: self.user.to_account_info(),
+            delegate: self.mint_authority.to_account_info(),
+        };
+        let ctx = CpiContext::new(self.token_program.to_account_info(), accounts);
+
+        approve(ctx, collateral_amount);
 
         Ok(())
     }
