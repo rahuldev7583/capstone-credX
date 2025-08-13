@@ -72,8 +72,8 @@ pub enum CredXError {
     MathUnderflow,
     #[msg("Outstanding debt exists")]
     OutstandingDebtExists,
+    #[msg("Insufficient collateral for debt")]
+    InsufficientCollateralForDebt,
+    #[msg("No withdrawable collateral")]
+    NoWithdrawableCollateral,
 }
-
-// initialize error
-
-//
