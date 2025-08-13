@@ -5,32 +5,59 @@ use anchor_spl::{
 };
 use pyth_sdk_solana::state::load_price_account;
 
-use crate::{CollateralVault, LoanAccount, ProtocolState};
+use crate::{error::CredXError, CollateralVault, LoanAccount, ProtocolState};
 
 #[derive(Accounts)]
 pub struct LendCreditToken<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
 
-    #[account(mut)]
+    #[account(
+        mut,
+        constraint = !protocol.is_locked @ CredXError::ProtocolLocked, constraint = protocol.credit_mint != credit_mint.key() @ CredXError::InvalidCreditMint
+    )]
     pub protocol: Account<'info, ProtocolState>,
 
-    #[account(mut, mint::decimals = 6, mint::authority = mint_authority)]
+    #[account(
+        mut,
+        mint::decimals = 6,
+        mint::authority = mint_authority,
+        constraint = credit_mint.key() == protocol.credit_mint @ CredXError::InvalidCreditMint
+    )]
     pub credit_mint: Account<'info, Mint>,
 
-    #[account(mut, associated_token::mint = credit_mint, associated_token::authority = user)]
+    #[account(
+        mut, 
+        associated_token::mint = credit_mint, 
+        associated_token::authority = user
+    )]
     pub user_credit_ata: Account<'info, TokenAccount>,
 
     #[account(seeds = [b"mint_authority"], bump)]
     pub mint_authority: UncheckedAccount<'info>,
 
-    #[account(mut, seeds = [b"collateral_vault", user.key().as_ref()], bump)]
+    #[account(
+        mut, 
+        seeds = [b"collateral_vault", user.key().as_ref()], 
+        bump,
+        constraint = collateral_vault.mint != credit_mint.key() @ CredXError::InvalidCollateralMint
+    )]
     pub collateral_vault: Account<'info, CollateralVault>,
 
-    #[account(mut, seeds = [b"loan", user.key().as_ref(), collateral_vault.key().as_ref()], bump)]
+    #[account(
+        mut, 
+        seeds = [b"loan", user.key().as_ref(), collateral_vault.key().as_ref()], 
+        bump,
+        constraint = loan_account.user == user.key() @ CredXError::UnauthorizedUser,
+        constraint = loan_account.collateral_amount > 0 @ CredXError::NoCollateralDeposited
+    )]
     pub loan_account: Account<'info, LoanAccount>,
 
+    #[account(
+        constraint = oracle_price_account.key() == loan_account.oracle_price_account @ CredXError::InvalidOracleAccount
+    )]
     pub oracle_price_account: AccountInfo<'info>,
+
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
@@ -38,28 +65,89 @@ pub struct LendCreditToken<'info> {
 
 impl<'info> LendCreditToken<'info> {
     pub fn get_price(&mut self) -> Result<i64> {
-        let data = self.oracle_price_account.try_borrow_data()?;
-        let price_feed = load_price_account(&data)?;
+        require!(
+            !self.oracle_price_account.data_is_empty(),
+            CredXError::EmptyOracleAccount
+        );
+        let data = self.oracle_price_account.try_borrow_data()
+            .map_err(|_| CredXError::FailedToBorrowOracleData)?;
+        
+        let price_feed = load_price_account(&data)
+            .map_err(|_| CredXError::InvalidPythAccount)?;
+
+        let price_status = price_feed.agg.status;
+        require!(
+            price_status == pyth_sdk_solana::state::PriceStatus::Trading,
+            CredXError::InvalidPriceStatus
+        );
+
         let current_price = price_feed.agg.price;
 
         let expo = price_feed.expo;
 
+        require!(current_price > 0, CredXError::InvalidPrice);
+
+        let current_time = Clock::get()?.unix_timestamp;
+        let price_time = price_feed.agg.pub_slot as i64; 
+        require!(
+            current_time - price_time < 300, 
+            CredXError::StalePrice
+        );
+
         let normalized_price = if expo < 0 {
-            current_price / 10_i64.pow((-expo) as u32)
+            current_price
+                .checked_div(10_i64.pow((-expo) as u32))
+                .ok_or(CredXError::MathOverflow)?
         } else {
-            current_price * 10_i64.pow(expo as u32)
+            current_price
+                .checked_mul(10_i64.pow(expo as u32))
+                .ok_or(CredXError::MathOverflow)?
         };
 
         Ok(normalized_price)
     }
 
     pub fn lend_credit_token(&mut self, bumps: &LendCreditTokenBumps) -> Result<()> {
+        require!(!self.protocol.is_locked, CredXError::ProtocolLocked);
+
+        require!(
+            self.loan_account.collateral_amount > 0,
+            CredXError::NoCollateralDeposited
+        );
+        
+        require!(
+            self.protocol.ltv_ratio_bps > 0 && self.protocol.ltv_ratio_bps <= 9000,
+            CredXError::InvalidLtvRatio
+        );
+
+
         let price = self.get_price()?;
 
-        let collateral_amount = self.loan_account.collateral_amount as i64;
-        let collateral_value = collateral_amount * price;
+         let collateral_value = self.loan_account.collateral_amount
+            .checked_mul(price as u64)
+            .ok_or(CredXError::MathOverflow)?;
+        
+        let borrow_value = collateral_value
+            .checked_mul(self.protocol.ltv_ratio_bps as u64)
+            .ok_or(CredXError::MathOverflow)?
+            .checked_div(10000)
+            .ok_or(CredXError::MathOverflow)?;
+        
+        require!(borrow_value > 0, CredXError::ZeroBorrowAmount);
+        
+        let borrow_amount = u64::try_from(borrow_value)
+            .map_err(|_| CredXError::InvalidBorrowAmount)?;
 
-        let borrow_value = (collateral_value * self.protocol.ltv_ratio_bps as i64) / 10000;
+        let max_borrowable = borrow_amount;
+        let current_debt = self.loan_account.remaining_debt;
+        let additional_borrowable = max_borrowable
+            .checked_sub(current_debt)
+            .ok_or(CredXError::ExceedsMaxBorrow)?;
+        
+        require!(
+            additional_borrowable > 0,
+            CredXError::MaxBorrowLimitReached
+        );
 
         let seeds = &[b"mint_authority".as_ref(), &[bumps.mint_authority]];
 
@@ -68,7 +156,7 @@ impl<'info> LendCreditToken<'info> {
         let accounts = MintTo {
             mint: self.credit_mint.to_account_info(),
             to: self.user_credit_ata.to_account_info(),
-            authority: self.protocol.to_account_info(),
+            authority: self.mint_authority.to_account_info(),
         };
         let ctx = CpiContext::new_with_signer(
             self.token_program.to_account_info(),
@@ -76,9 +164,18 @@ impl<'info> LendCreditToken<'info> {
             signer_seeds,
         );
 
-        mint_to(ctx, borrow_value as u64);
+        mint_to(ctx, borrow_value as u64)?;
 
-        self.loan_account.remaining_debt += borrow_value as u64;
+        self.loan_account.remaining_debt = self.loan_account.remaining_debt
+            .checked_add(additional_borrowable)
+            .ok_or(CredXError::MathOverflow)?;
+
+        msg!(
+            "Minted {} credit tokens to user: {}, Total debt: {}",
+            additional_borrowable,
+            self.user.key(),
+            self.loan_account.remaining_debt
+        );
 
         Ok(())
     }

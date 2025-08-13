@@ -1,3 +1,4 @@
+use crate::error::CredXError;
 use anchor_lang::prelude::*;
 use anchor_spl::token::{Mint, Token};
 
@@ -24,6 +25,11 @@ pub struct InitializeProtocol<'info> {
 
 impl<'info> InitializeProtocol<'info> {
     pub fn initialize_protocol(&mut self, bumps: &InitializeProtocolBumps) -> Result<()> {
+        require!(
+            self.protocol.ltv_ratio_bps > 0 && self.protocol.ltv_ratio_bps <= 9000,
+            CredXError::InvalidLtvRatio
+        );
+
         self.protocol.set_inner(ProtocolState {
             admin: self.admin.key(),
             ltv_ratio_bps: 600,
@@ -31,7 +37,7 @@ impl<'info> InitializeProtocol<'info> {
             is_locked: false,
             bump: bumps.protocol,
         });
-
+        msg!("Protocol initialized by admin: {}", self.admin.key());
         Ok(())
     }
 }
