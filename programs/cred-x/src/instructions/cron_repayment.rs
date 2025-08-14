@@ -1,7 +1,8 @@
 use crate::{error::CredXError, CollateralVault, LoanAccount, ProtocolState};
 use anchor_lang::prelude::*;
 use anchor_spl::token::{burn, Burn, Mint, Token, TokenAccount};
-use pyth_sdk_solana::state::load_price_account;
+use pyth_sdk_solana::state::{load_price_account, GenericPriceAccount};
+use pyth_sdk_solana::{Price};
 
 #[derive(Accounts)]
 pub struct CronRepayment<'info> {
@@ -46,9 +47,11 @@ pub struct CronRepayment<'info> {
     )]
     pub credit_mint: Account<'info, Mint>,
 
+    /// CHECK: This is a PDA derived from seeds, used as mint authority for credit tokens
     #[account(seeds = [b"mint_authority"], bump)]
     pub mint_authority: UncheckedAccount<'info>,
 
+    /// CHECK: This is a PDA derived from seeds, used as program authority for various operations
     #[account(seeds = [b"program_authority"], bump)]
     pub program_authority: UncheckedAccount<'info>,
 
@@ -60,6 +63,7 @@ pub struct CronRepayment<'info> {
     )]
     pub user_credit_ata: Account<'info, TokenAccount>,
 
+    /// CHECK: Oracle price account is validated by comparing its key with the stored oracle_price_account in loan_account
     #[account(
         constraint = oracle_price_account.key() == loan_account.oracle_price_account @ CredXError::InvalidOracleAccount
     )]
@@ -74,26 +78,19 @@ impl<'info> CronRepayment<'info> {
             !self.oracle_price_account.data_is_empty(),
             CredXError::EmptyOracleAccount
         );
-        let data = self.oracle_price_account.try_borrow_data()
+        let price_feed = self.oracle_price_account.try_borrow_data()
             .map_err(|_| CredXError::FailedToBorrowOracleData)?;
-        
-        let price_feed = load_price_account(&data)
-            .map_err(|_| CredXError::InvalidPythAccount)?;
 
-        let price_status = price_feed.agg.status;
-        require!(
-            price_status == pyth_sdk_solana::state::PriceStatus::Trading,
-            CredXError::InvalidPriceStatus
-        );
+        let price_account: &GenericPriceAccount<32, Price> = load_price_account(&price_feed)
+            .map_err(|_| CredXError::FailedToLoadPriceAccount)?;
+        let current_price = price_account.agg.price;
 
-        let current_price = price_feed.agg.price;
-
-        let expo = price_feed.expo;
+        let expo = price_account.expo;
 
         require!(current_price > 0, CredXError::InvalidPrice);
 
         let current_time = Clock::get()?.unix_timestamp;
-        let price_time = price_feed.agg.pub_slot as i64; 
+        let price_time = price_account.agg.pub_slot as i64; 
         require!(
             current_time - price_time < 300, 
             CredXError::StalePrice

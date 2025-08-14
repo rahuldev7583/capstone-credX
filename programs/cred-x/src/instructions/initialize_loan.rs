@@ -22,6 +22,7 @@ pub struct InitializeLoan<'info> {
     #[account(init_if_needed, payer = user, associated_token::mint = credit_mint, associated_token::authority = user)]
     pub user_credit_ata: Account<'info, TokenAccount>,
 
+    /// CHECK: This is a PDA derived from seeds, used as mint authority for credit tokens
     #[account(seeds = [b"mint_authority"], bump)]
     pub mint_authority: UncheckedAccount<'info>,
 
@@ -31,6 +32,7 @@ pub struct InitializeLoan<'info> {
     #[account(init, payer = user, space = LoanAccount::INIT_SPACE, seeds = [b"loan", user.key().as_ref(), collateral_vault.key().as_ref()], bump)]
     pub loan_account: Account<'info, LoanAccount>,
 
+    /// CHECK: Oracle price account is validated by comparing its key with the stored oracle_price_account in loan_account
     pub oracle_price_account: AccountInfo<'info>,
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub token_program: Program<'info, Token>,

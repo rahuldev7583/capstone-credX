@@ -47,6 +47,7 @@ pub struct DepositCollateral<'info> {
     )]
     pub collateral_vault_ata: Account<'info, TokenAccount>,
 
+    /// CHECK: This is a PDA derived from seeds, used as program authority for various operations
     #[account(seeds = [b"program_authority"], bump)]
     pub program_authority: UncheckedAccount<'info>,
 

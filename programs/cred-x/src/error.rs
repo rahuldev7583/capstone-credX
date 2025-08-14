@@ -76,4 +76,6 @@ pub enum CredXError {
     InsufficientCollateralForDebt,
     #[msg("No withdrawable collateral")]
     NoWithdrawableCollateral,
+    #[msg("Failed to load price account")]
+    FailedToLoadPriceAccount,
 }

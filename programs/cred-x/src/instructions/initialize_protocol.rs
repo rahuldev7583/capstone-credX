@@ -12,6 +12,7 @@ pub struct InitializeProtocol<'info> {
     #[account(init, payer = admin, mint::decimals = 6, mint::authority = mint_authority, seeds = [b"credit", admin.key().as_ref(), mint_authority.key().as_ref() ], bump)]
     pub credit_mint: Account<'info, Mint>,
 
+    /// CHECK: This is a PDA derived from seeds, used as mint authority for credit tokens
     #[account(seeds = [b"mint_authority"], bump)]
     pub mint_authority: UncheckedAccount<'info>,
 
