@@ -78,4 +78,12 @@ pub enum CredXError {
     NoWithdrawableCollateral,
     #[msg("Failed to load price account")]
     FailedToLoadPriceAccount,
+    #[msg("Unauthorized admin")]
+    UnauthorizedAdmin,
+    #[msg("Account not enough keys")]
+    AccountNotEnoughKeys,
+    #[msg("No active loan")]
+    NoActiveLoan,
+    #[msg("Insufficient collateral value")]
+    InsufficientCollateralValue,
 }

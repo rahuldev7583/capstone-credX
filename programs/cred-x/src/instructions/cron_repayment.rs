@@ -1,13 +1,12 @@
+use crate::SimplePriceOracle;
 use crate::{error::CredXError, CollateralVault, LoanAccount, ProtocolState};
 use anchor_lang::prelude::*;
 use anchor_spl::token::{burn, Burn, Mint, Token, TokenAccount};
 use pyth_sdk_solana::state::{load_price_account, GenericPriceAccount};
-use pyth_sdk_solana::{Price};
+use pyth_sdk_solana::Price;
 
 #[derive(Accounts)]
 pub struct CronRepayment<'info> {
-    #[account(mut)]
-    pub authority: Signer<'info>,
 
     #[account(
         mut, 
@@ -42,18 +41,20 @@ pub struct CronRepayment<'info> {
     #[account(
         mut,
         mint::decimals = 6,
-        mint::authority = mint_authority,
         constraint = credit_mint.key() == protocol.credit_mint @ CredXError::InvalidCreditMint
     )]
     pub credit_mint: Account<'info, Mint>,
 
-    /// CHECK: This is a PDA derived from seeds, used as mint authority for credit tokens
-    #[account(seeds = [b"mint_authority"], bump)]
-    pub mint_authority: UncheckedAccount<'info>,
-
-    /// CHECK: This is a PDA derived from seeds, used as program authority for various operations
+    /// CHECK: PDA used as program authority
     #[account(seeds = [b"program_authority"], bump)]
     pub program_authority: UncheckedAccount<'info>,
+
+     #[account(
+        mut,
+        associated_token::mint = credit_mint,
+        associated_token::authority = program_authority,
+    )]
+    pub protocol_credit_ata: Account<'info, TokenAccount>,
 
     #[account(
         mut,
@@ -62,71 +63,71 @@ pub struct CronRepayment<'info> {
         constraint = user_credit_ata.amount > 0 @ CredXError::NoTokensToBurn
     )]
     pub user_credit_ata: Account<'info, TokenAccount>,
-
     /// CHECK: Oracle price account is validated by comparing its key with the stored oracle_price_account in loan_account
-    #[account(
-        constraint = oracle_price_account.key() == loan_account.oracle_price_account @ CredXError::InvalidOracleAccount
-    )]
-    pub oracle_price_account: AccountInfo<'info>,
+    // #[account(
+    //     constraint = oracle_price_account.key() == loan_account.oracle_price_account @ CredXError::InvalidOracleAccount
+    // )]
+    // pub oracle_price_account: AccountInfo<'info>,
+
+    pub oracle_price_account: Account<'info, SimplePriceOracle>,
 
     pub token_program: Program<'info, Token>,
 }
 
 impl<'info> CronRepayment<'info> {
-      pub fn get_price(&mut self) -> Result<i64> {
-        require!(
-            !self.oracle_price_account.data_is_empty(),
-            CredXError::EmptyOracleAccount
-        );
-        let price_feed = self.oracle_price_account.try_borrow_data()
-            .map_err(|_| CredXError::FailedToBorrowOracleData)?;
+    pub fn get_price(&mut self) -> Result<i64> {
+        // require!(
+        //     !self.oracle_price_account.data_is_empty(),
+        //     CredXError::EmptyOracleAccount
+        // );
+        // let price_feed = self.oracle_price_account.try_borrow_data()
+        //     .map_err(|_| CredXError::FailedToBorrowOracleData)?;
 
-        let price_account: &GenericPriceAccount<32, Price> = load_price_account(&price_feed)
-            .map_err(|_| CredXError::FailedToLoadPriceAccount)?;
-        let current_price = price_account.agg.price;
+        // let price_account: &GenericPriceAccount<32, Price> = load_price_account(&price_feed)
+        //     .map_err(|_| CredXError::FailedToLoadPriceAccount)?;
+        // let current_price = price_account.agg.price;
 
-        let expo = price_account.expo;
+        // let expo = price_account.expo;
 
+        // require!(current_price > 0, CredXError::InvalidPrice);
+
+        // let current_time = Clock::get()?.unix_timestamp;
+        // let price_time = price_account.agg.pub_slot as i64; 
+        // require!(
+        //     current_time - price_time < 300, 
+        //     CredXError::StalePrice
+        // );
+
+        // let normalized_price = if expo < 0 {
+        //     current_price
+        //         .checked_div(10_i64.pow((-expo) as u32))
+        //         .ok_or(CredXError::MathOverflow)?
+        // } else {
+        //     current_price
+        //         .checked_mul(10_i64.pow(expo as u32))
+        //         .ok_or(CredXError::MathOverflow)?
+        // };
+
+        // Ok(normalized_price)
+        let current_price = self.oracle_price_account.price;
         require!(current_price > 0, CredXError::InvalidPrice);
 
         let current_time = Clock::get()?.unix_timestamp;
-        let price_time = price_account.agg.pub_slot as i64; 
-        require!(
-            current_time - price_time < 300, 
-            CredXError::StalePrice
-        );
+        let price_time = self.oracle_price_account.timestamp;
+        require!(current_time - price_time < 300, CredXError::StalePrice);
 
-        let normalized_price = if expo < 0 {
-            current_price
-                .checked_div(10_i64.pow((-expo) as u32))
-                .ok_or(CredXError::MathOverflow)?
-        } else {
-            current_price
-                .checked_mul(10_i64.pow(expo as u32))
-                .ok_or(CredXError::MathOverflow)?
-        };
-
-        Ok(normalized_price)
+        Ok(current_price as i64)
     }
 
     pub fn cron_repayment(&mut self, bumps: &CronRepaymentBumps) -> Result<()> {
         require!(!self.protocol.is_locked, CredXError::ProtocolLocked);
-
-        require!(
-            self.loan_account.remaining_debt > 0,
-            CredXError::NoOutstandingDebt
-        );
-
-        require!(
-            self.collateral_vault_ata.amount >= self.loan_account.collateral_amount,
-            CredXError::InsufficientCollateral
-        );
+        require!(self.loan_account.remaining_debt > 0, CredXError::NoOutstandingDebt);
+        require!(self.collateral_vault_ata.amount >= self.loan_account.collateral_amount, CredXError::InsufficientCollateral);
 
         let vault_balance = self.collateral_vault_ata.amount;
         let original_collateral = self.loan_account.collateral_amount;
-        
-        let yield_amount = vault_balance
-            .checked_sub(original_collateral)
+
+        let yield_amount = vault_balance.checked_sub(original_collateral)
             .ok_or(CredXError::NegativeYield)?;
 
         if yield_amount == 0 {
@@ -135,27 +136,23 @@ impl<'info> CronRepayment<'info> {
         }
 
         let normalized_price = self.get_price()?;
-
         let yield_value_in_usd = (yield_amount as i64)
             .checked_mul(normalized_price)
             .ok_or(CredXError::MathOverflow)?;
-        
-        require!(yield_value_in_usd > 0, CredXError::ZeroRepaymentValue);
-        
-        let repayment_value = yield_value_in_usd as u64;
-        
-        let actual_repayment = std::cmp::min(repayment_value, self.loan_account.remaining_debt);
-        
-        require!(
-            self.user_credit_ata.amount >= actual_repayment,
-            CredXError::InsufficientCreditTokens
-        );
 
-        let cpi_accounts = Burn {
+        require!(yield_value_in_usd > 0, CredXError::ZeroRepaymentValue);
+
+        let repayment_value = yield_value_in_usd as u64;
+        let actual_repayment = std::cmp::min(repayment_value, self.loan_account.remaining_debt);
+
+        require!(self.user_credit_ata.amount >= actual_repayment, CredXError::InsufficientCreditTokens);
+
+        let cpi_accounts = Burn { 
             mint: self.credit_mint.to_account_info(),
-            from: self.user_credit_ata.to_account_info(),
+            from: self.user_credit_ata.to_account_info(), 
             authority: self.program_authority.to_account_info(),
-        };
+    };
+
 
         let seeds = &[b"program_authority".as_ref(), &[bumps.program_authority]];
         let signer_seeds = &[&seeds[..]];
@@ -165,6 +162,7 @@ impl<'info> CronRepayment<'info> {
             cpi_accounts,
             signer_seeds,
         );
+
         burn(burn_ctx, actual_repayment)?;
 
         self.loan_account.remaining_debt = self.loan_account.remaining_debt

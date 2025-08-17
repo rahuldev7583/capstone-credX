@@ -18,9 +18,9 @@ pub struct DepositCollateral<'info> {
     )]
     pub protocol: Account<'info, ProtocolState>,
 
-    #[account(
-        constraint = supported_collateral(&collateral_mint.key()) @ CredXError::UnsupportedCollateralMint
-    )]
+    // #[account(
+    //     constraint = supported_collateral(&collateral_mint.key()) @ CredXError::UnsupportedCollateralMint
+    // )]
     pub collateral_mint: Account<'info, Mint>,
 
     #[account(

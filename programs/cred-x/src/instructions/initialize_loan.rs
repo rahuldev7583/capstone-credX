@@ -1,5 +1,5 @@
 use crate::error::CredXError;
-use crate::{CollateralVault, LoanAccount};
+use crate::{CollateralVault, LoanAccount, ProtocolState};
 use anchor_lang::prelude::*;
 use anchor_spl::token::{Mint, Token};
 use anchor_spl::{associated_token::AssociatedToken, token::TokenAccount};
@@ -16,20 +16,48 @@ pub struct InitializeLoan<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
 
-    #[account(mut, mint::decimals = 6, mint::authority = mint_authority)]
+    #[account(
+        seeds = [b"protocol", protocol.admin.as_ref()],
+        bump = protocol.bump
+    )]
+    pub protocol: Account<'info, ProtocolState>,
+
+    /// CHECK: PDA used as program authority
+    #[account(seeds = [b"program_authority"], bump)]
+    pub program_authority: UncheckedAccount<'info>,
+
+    #[account(
+        mut,
+        mint::decimals = 6,
+        mint::authority = program_authority,
+        constraint = credit_mint.key() == protocol.credit_mint @ CredXError::InvalidCreditMint
+    )]
     pub credit_mint: Account<'info, Mint>,
 
-    #[account(init_if_needed, payer = user, associated_token::mint = credit_mint, associated_token::authority = user)]
+    #[account(
+        init_if_needed,
+        payer = user,
+        associated_token::mint = credit_mint,
+        associated_token::authority = user
+    )]
     pub user_credit_ata: Account<'info, TokenAccount>,
 
-    /// CHECK: This is a PDA derived from seeds, used as mint authority for credit tokens
-    #[account(seeds = [b"mint_authority"], bump)]
-    pub mint_authority: UncheckedAccount<'info>,
-
-    #[account(init, payer = user, space = 8 + CollateralVault::INIT_SPACE, seeds = [b"collateral_vault", user.key().as_ref()], bump)]
+    #[account(
+        init,
+        payer = user,
+        space = 8 + CollateralVault::INIT_SPACE,
+        seeds = [b"collateral_vault", user.key().as_ref()],
+        bump
+    )]
     pub collateral_vault: Account<'info, CollateralVault>,
 
-    #[account(init, payer = user, space = LoanAccount::INIT_SPACE, seeds = [b"loan", user.key().as_ref(), collateral_vault.key().as_ref()], bump)]
+    #[account(
+        init,
+        payer = user,
+        space = 8 + LoanAccount::INIT_SPACE,
+        seeds = [b"loan", user.key().as_ref(), collateral_vault.key().as_ref()],
+        bump
+    )]
     pub loan_account: Account<'info, LoanAccount>,
 
     /// CHECK: Oracle price account is validated by comparing its key with the stored oracle_price_account in loan_account
@@ -50,10 +78,10 @@ impl<'info> InitializeLoan<'info> {
             CredXError::InvalidUser
         );
 
-        require!(
-            supported_collateral(&collateral_mint),
-            CredXError::UnsupportedCollateralMint
-        );
+        // require!(
+        //     supported_collateral(&collateral_mint),
+        //     CredXError::UnsupportedCollateralMint
+        // );
         require!(
             !self.oracle_price_account.key().eq(&Pubkey::default()),
             CredXError::InvalidOracleAccount
@@ -73,6 +101,7 @@ impl<'info> InitializeLoan<'info> {
             oracle_price_account: self.oracle_price_account.key(),
         });
 
+        msg!("Loan account initialized for user: {}", self.user.key());
         Ok(())
     }
 }
